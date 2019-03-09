@@ -1,5 +1,5 @@
-using Convex, SCS
-using Optim
+using MATLAB
+
 if true
     include("./CPmap.jl")
     include("./DPG.jl")
@@ -270,4 +270,4 @@ nT1=get_variable(mf, "nT2Bunny")
 T1=get_variable(mf, "T2Bunny")
 
 #close(mf)
-@time Uvals,control1,control2,control3=mainAni(101,80,Q,nT1,T1,0.0);
+@time Uvals,control1,control2,control3=mainAni(101,1,Q,nT1,T1,0.0);
