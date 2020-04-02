@@ -1,6 +1,7 @@
 module SphereUtils
 using Interpolations
 using LinearAlgebra
+using Printf
 
 function exact_dist(x,y,z,target_normal)
 
@@ -29,14 +30,13 @@ function init_point_target!(uvals::Array{Float64},
 							V::Array{Float64},
 							W::Array{Float64})
 
-	xyz_extend=zeros(3,1001)
-
-	for i=0:1000
-			alpha=i/1000
+	xyz_extend=zeros(3,501)
+	N = Int(1/dx)+1
+	for i=0:500
+			alpha=i/500
 			xyz_extend[:,i+1]=alpha*(target_point+tube_eps*target_normal)+(1-alpha)*(target_point-tube_eps*target_normal)
 	end
-
-	for a=0:1000
+	for a=0:500
 		x=xyz_extend[1,a+1]
 		y=xyz_extend[2,a+1]
 		z=xyz_extend[3,a+1]
@@ -56,10 +56,60 @@ function init_point_target!(uvals::Array{Float64},
 			k=currPt[3]
 			if status[i,j,k]
 				uvals[i,j,k] = exact_dist(U[i,j,k],
-										 V[i,j,k],
-									     W[i,j,k],
-									     target_normal)
+										  V[i,j,k],
+									      W[i,j,k],
+									      target_normal)
 			    status[i,j,k] = false
+			end
+		end
+	end
+end
+
+function init_point_target_high_order!(uvals::Array{Float64},
+ 									  status::Array{Bool},
+									  dx,
+									  dy,
+									  dz,
+									  target_point,
+									  target_normal,
+									  tube_eps,
+									  U::Array{Float64},
+									  V::Array{Float64},
+									  W::Array{Float64})
+
+	xyz_extend=zeros(3,1001)
+	N = Int(1/dx)+1
+	for i=0:1000
+			alpha=i/1000
+			xyz_extend[:,i+1]=alpha*(target_point+tube_eps*target_normal)+(1-alpha)*(target_point-tube_eps*target_normal)
+	end
+
+	for a=0:1000
+		x=xyz_extend[1,a+1]
+		y=xyz_extend[2,a+1]
+		z=xyz_extend[3,a+1]
+		iminus=(floor(Int,(x)/dx))+1;
+		jminus=(floor(Int,(y)/dy))+1;
+		kminus=(floor(Int,(z)/dz))+1;
+		A_i = (iminus-2):(iminus+3)
+		A_j = (jminus-2):(jminus+3)
+		A_k = (kminus-2):(kminus+3)
+
+		NBRS = [[i,j,k] for i in A_i, j in A_j, k in A_k]
+
+		for n=1:216
+			currPt=NBRS[n]
+			i=currPt[1]
+			j=currPt[2]
+			k=currPt[3]
+			if max(i,j,k)<=N && min(i,j,k)>0
+				if status[i,j,k]
+					uvals[i,j,k] = exact_dist(U[i,j,k],
+											 V[i,j,k],
+										     W[i,j,k],
+										     target_normal)
+				    status[i,j,k] = false
+				end
 			end
 		end
 	end
@@ -122,12 +172,10 @@ function ghost_node_eval(i,j,k, uvals::Array{Float64}, dx::Float64, dy::Float64,
 	x=Px+alpha*normal[1]
 	y=Py+alpha*normal[2]
 	z=Pz+alpha*normal[3]
-	#uncomment to use trilinear inteprolation instead of tricubic
-	#=x=gridpoint[1]+(3*dx)*normal[1]
-	y=gridpoint[2]+(3*dy)*normal[2]
-	z=gridpoint[3]+(3*dz)*normal[3]=#
+	#=uncomment to use trilinear inteprolation instead of tricubic
 
-	#=iminus=(floor(Int,(x)/dx))+1
+
+	iminus=(floor(Int,(x)/dx))+1
 	jminus=(floor(Int,(y)/dy))+1
 	kminus=(floor(Int,(z)/dz))+1
 	iplus=iminus+1
@@ -140,14 +188,14 @@ function ghost_node_eval(i,j,k, uvals::Array{Float64}, dx::Float64, dy::Float64,
 	y2=(jplus-1)*dy
 	z2=(kplus-1)*dz
 
-	q000=u[iminus,jminus,kminus]
-	q001=u[iminus,jminus,kplus]
-	q010=u[iminus,jplus,kminus]
-	q011=u[iminus,jplus,kplus]
-	q100=u[iplus,jminus,kminus]
-	q101=u[iplus,jminus,kplus]
-	q110=u[iplus,jplus,kminus]
-	q111=u[iplus,jplus,kplus]
+	q000=uvals[iminus,jminus,kminus]
+	q001=uvals[iminus,jminus,kplus]
+	q010=uvals[iminus,jplus,kminus]
+	q011=uvals[iminus,jplus,kplus]
+	q100=uvals[iplus,jminus,kminus]
+	q101=uvals[iplus,jminus,kplus]
+	q110=uvals[iplus,jplus,kminus]
+	q111=uvals[iplus,jplus,kplus]
 
 	uval=triLinterp(x,  y,  z,  q000,  q001, q010,  q011,  q100,  q101,  q110,
 		   q111,  x1,  x2,  y1,  y2,  z1,  z2)=#
@@ -192,15 +240,16 @@ function lax_sweep(uvals::Array{Float64},
 				  V::Array{Float64},
 				  W::Array{Float64},
 				  eps)
-
-	pp,qp,rp=0.0, 0.0, 0.0
-	pm,qm,r_m=0.0, 0.0, 0.0
+	max_error = 0.0
+	pp,qp,rp = 0.0, 0.0, 0.0
+	pm,qm,r_m = 0.0, 0.0, 0.0
 	rhs_val = 0.0
 	uw, ue, us, un, ut, ub, uo = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 	c= 0.0
 	nx, ny, nz = map(dim->size(uvals, dim), (1,2,3))
+
    	for sgn1 in (-1,1), sgn2 in (-1,1), sgn3 in (-1,1)
-		for k= (sgn3<0 ? nz-1 : 2): sgn3 : (sgn3<0 ? 2 : nz-1),
+        for k= (sgn3<0 ? nz-1 : 2): sgn3 : (sgn3<0 ? 2 : nz-1),
 			j= (sgn2<0 ? ny-1 : 2): sgn2 : (sgn2<0 ? 2 : ny-1),
 			i= (sgn1<0 ? nx-1 : 2): sgn1 : (sgn1<0 ? 2 : nx-1)
 
@@ -211,6 +260,8 @@ function lax_sweep(uvals::Array{Float64},
 				end
 
 			elseif status[i,j,k]
+
+
 				c=1/(σx/dx+σy/dy+σz/dz)
 				rhs_val=rhs[i,j,k]
 
@@ -226,12 +277,116 @@ function lax_sweep(uvals::Array{Float64},
 				r_m=(ut-ub)/(2*dz)
 				uo=c*(rhs_val-H(pm,qm,r_m)+σx*pp+σy*qp+σz*rp)
 				if uo<uvals[i,j,k]
+					curr_error = abs(uo - uvals[i,j,k])
 					uvals[i,j,k]=uo
+					max_error = max(curr_error, max_error)
 				end
 			end
 		end
 	end
+	return max_error
 
+end
+
+function lax_sweep_high_order(uvals::Array{Float64},
+							  status::Array{Bool},
+							  edge::Array{Bool},
+							  rhs::Array{Float64},
+				              dx,
+							  dy,
+							  dz,
+							  σx,
+							  σy,
+							  σz,
+							  H::Function,
+							  U::Array{Float64},
+							  V::Array{Float64},
+							  W::Array{Float64},
+							  eps)
+	max_error = 0.0
+	pp,qp,rp = 0.0, 0.0, 0.0
+	pm,qm,r_m = 0.0, 0.0, 0.0
+	rhs_val = 0.0
+	pwm, qwm, rwm = 0.0, 0.0, 0.0
+	pwp, qwp, rwp = 0.0, 0.0, 0.0
+	prm, qrm, rrm = 0.0, 0.0, 0.0
+	prp, qrp, rrp = 0.0, 0.0, 0.0
+
+	p_p, p_m, q_p, q_m, r_p, r_m1 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+	uw1, ue1, us1, un1, ut1, ub1, uo = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+	uw2, ue2, us2, un2, ut2, ub2 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+	c= 0.0
+	nx, ny, nz = map(dim->size(uvals, dim), (1,2,3))
+   	for sgn1 in (-1,1), sgn2 in (-1,1), sgn3 in (-1,1)
+		for k= (sgn3<0 ? nz-1 : 2): sgn3 : (sgn3<0 ? 2 : nz-1),
+			j= (sgn2<0 ? ny-1 : 2): sgn2 : (sgn2<0 ? 2 : ny-1),
+			i= (sgn1<0 ? nx-1 : 2): sgn1 : (sgn1<0 ? 2 : nx-1)
+
+			if edge[i,j,k]
+				uo=ghost_node_eval(i,j,k,uvals,dx,dy,dz,U,V,W,eps)
+				# if uo<uvals[i,j,k]
+				uvals[i,j,k]=uo
+				# end
+
+			elseif status[i,j,k]
+
+
+				c=1/(σx/dx+σy/dy+σz/dz)
+				rhs_val=rhs[i,j,k]
+
+				uw1=uvals[i-1,j,k];ue1=uvals[i+1,j,k];
+				us1=uvals[i,j-1,k];un1=uvals[i,j+1,k];
+				ub1=uvals[i,j,k-1];ut1=uvals[i,j,k+1];
+
+				uw2=uvals[i-2,j,k];ue2=uvals[i+2,j,k];
+				us2=uvals[i,j-2,k];un2=uvals[i,j+2,k];
+				ub2=uvals[i,j,k-2];ut2=uvals[i,j,k+2];
+
+				weno_eps = 1.e-6
+
+				prm = (weno_eps+(uvals[i,j,k]-2*uw1+uw2)^2)/(weno_eps+(ue1-2*uvals[i,j,k]+uw1)^2)
+				pwm = 1.0/(1.0+2.0*prm^2)
+				prp = (weno_eps+(ue2-2*ue1+uvals[i,j,k])^2)/(weno_eps+(ue1-2*uvals[i,j,k]+uw1)^2)
+				pwp = 1.0/(1.0 + 2.0*prp^2)
+
+				qrm = (weno_eps+(uvals[i,j,k]-2*us1+us2)^2)/(weno_eps+(un1-2*uvals[i,j,k]+us1)^2)
+				qwm = 1.0/(1.0+2.0*qrm^2)
+				qrp = (weno_eps+(un2-2*un1+uvals[i,j,k])^2)/(weno_eps+(un1-2*uvals[i,j,k]+us1)^2)
+				qwp = 1.0/(1.0 + 2.0*qrp^2)
+
+				rrm = (weno_eps+(uvals[i,j,k]-2*ub1+ub2)^2)/(weno_eps+(ut1-2*uvals[i,j,k]+ub1)^2)
+				rwm = 1.0/(1.0+2.0*rrm^2)
+				rrp = (weno_eps+(ut2-2*ut1+uvals[i,j,k])^2)/(weno_eps+(ut1-2*uvals[i,j,k]+ub1)^2)
+				rwp = 1.0/(1.0 + 2.0*rrp^2)
+
+				p_m = (1-pwm)*(ue1-uw1)/(2*dx) + pwm*((3*uvals[i,j,k]-4*uw1+uw2)/(2*dx))
+				p_p = (1-pwp)*(ue1-uw1)/(2*dx) + pwp*((-1*ue2+4*ue1-3*uvals[i,j,k])/(2*dx))
+
+				q_m = (1-qwm)*(un1-us1)/(2*dy) + qwm*((3*uvals[i,j,k]-4*us1+us2)/(2*dy))
+				q_p = (1-qwp)*(un1-us1)/(2*dy) + qwp*((-1*un2+4*un1-3*uvals[i,j,k])/(2*dy))
+
+				r_m1 = (1-rwm)*(ut1-ub1)/(2*dz) + rwm*((3*uvals[i,j,k]-4*ub1+ub2)/(2*dz))
+				r_p = (1-rwp)*(ut1-ub1)/(2*dz) + rwp*((-1*ut2+4*ut1-3*uvals[i,j,k])/(2*dz))
+
+				pp = (p_m+p_p)/2.0
+				qp = (q_m+q_p)/2.0
+				rp = (r_m1+r_p)/2.0
+
+				pm = (p_p-p_m)/2.0
+				qm = (q_p-q_m)/2.0
+				r_m = (r_p-r_m1)/2.0
+
+
+				uo=c*(rhs_val-H(pp,qp,rp)+σx*pm+σy*qm+σz*r_m)+uvals[i,j,k]
+
+				curr_error = abs(uo - uvals[i,j,k])
+				uvals[i,j,k]=uo
+				max_error = max(curr_error, max_error)
+
+			end
+		end
+	end
+	return max_error
 
 end
 
@@ -239,6 +394,7 @@ function l1_error(uvals::Array{Float64},
 				  U::Array{Float64},
 				  V::Array{Float64},
 				  W::Array{Float64},
+				  status::Array{Bool},
 				  dx,
 				  dy,
 				  dz,
@@ -247,29 +403,33 @@ function l1_error(uvals::Array{Float64},
 				  target_normal)
 
 	 L1err=0
+	 num_pts = 0
 	 for I in CartesianIndices(uvals)
 		i = I[1]
 		j = I[2]
 		k = I[3]
-	    if 0<uvals[i,j,k]<500 #&& initial[i,j,k]==false
-	      CPx=U[i,j,k]
-	      CPy=V[i,j,k]
-	      CPz=W[i,j,k]
-				gridpoint=[(i-1)*dx,(j-1)*dy,(k-1)*dz]
-				r=norm(gridpoint-[.5,.5,.5])
-				η=-1*(r-radius)
-				σ1=1+η/r
-				σ2=1+η/r
-				Jac=σ1*σ2
-				kern=(1+cos(pi*η/eps))/(2*eps)
+		if status[i,j,k] #&& initial[i,j,k]==false
+			CPx=U[i,j,k]
+			CPy=V[i,j,k]
+			CPz=W[i,j,k]
+			gridpoint=[(i-1)*dx,(j-1)*dy,(k-1)*dz]
+			r=norm(gridpoint-[.5,.5,.5])
+			η=-1*(r-radius)
+			σ1=1+η/r
+			σ2=1+η/r
+			Jac=σ1*σ2
+			kern=(1+cos(pi*η/eps))/(2*eps)
 
-				uexact=exact_dist(CPx,CPy,CPz,target_normal)
-				uo=uvals[i,j,k]
-				diff=abs(uo-uexact);
-				L1err+=diff*dx*dy*dz*kern*Jac
-			end
+			uexact=exact_dist(CPx,CPy,CPz,target_normal)
+			uo=uvals[i,j,k]
+			diff=abs(uo-uexact);
+
+			num_pts = num_pts + 1
+
+			L1err+=diff*dx*dy*dz*kern*Jac
+		end
   	end
-	return  L1err
+	return  L1err, num_pts
 end
 
 function linf_error(uvals::Array{Float64},
@@ -278,6 +438,7 @@ function linf_error(uvals::Array{Float64},
 					W::Array{Float64},
 					target_normal)
 	 maxdiff =0
+
 	 ijk=[0,0,0]
 	 for I in CartesianIndices(uvals)
 		i = I[1]
