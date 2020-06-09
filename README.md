@@ -16,7 +16,7 @@ torustest.jl - distance function on the torus (Example 2)
 torussort.jl - sort the point cloud into "level belts" (Example 2)
 Bunnytest.jl - distance function on the Stanford bunny (Example 3)
 anisotropictest.jl -anisotropic HJB equation with curvature based speed function (Example 3)
-
+revision1_code/run_examples.jl - code used to compute Examples 4.1-4.4 in the revised paper
 The other Julia files are modules included at the beginning of each of the test files.
 
 Included is also the point cloud data used in the paper. The point clouds are stored in Matlab data files and read into Julia.
